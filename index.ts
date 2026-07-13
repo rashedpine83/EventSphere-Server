@@ -76,7 +76,154 @@ async function run() {
     await client.connect();
     const database = client.db("EventSphere");
     const eventsCollection = database.collection("events");
+    const registrationsCollection = database.collection("registrations");
     const usersCollection = database.collection("user");
+
+    app.post(
+      "/api/events/:id/register",
+      verifyToken,
+      async (req: AuthRequest, res: Response) => {
+        try {
+          const { id } = req.params as { id: string };
+
+          const { attendeeName, phone, address } = req.body;
+
+          // ================= Validation =================
+
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid Event ID",
+            });
+          }
+
+          if (!attendeeName || !phone) {
+            return res.status(400).json({
+              success: false,
+              message: "Name and phone are required.",
+            });
+          }
+
+          // ================= Find Event =================
+
+          const event = await eventsCollection.findOne({
+            _id: new ObjectId(id),
+          });
+
+          if (!event) {
+            return res.status(404).json({
+              success: false,
+              message: "Event not found.",
+            });
+          }
+
+          // ================= Organizer Check =================
+
+          if (event.organizerEmail === req.user?.email) {
+            return res.status(400).json({
+              success: false,
+              message: "You cannot join your own event.",
+            });
+          }
+
+          // ================= Event Expired =================
+
+          const eventEnd = new Date(`${event.eventDate}T${event.endTime}`);
+
+          if (eventEnd < new Date()) {
+            return res.status(400).json({
+              success: false,
+              message: "This event has already ended.",
+            });
+          }
+
+          // ================= Duplicate Check =================
+
+          const alreadyRegistered = await registrationsCollection.findOne({
+            eventId: id,
+            attendeeEmail: req.user?.email,
+          });
+
+          if (alreadyRegistered) {
+            return res.status(400).json({
+              success: false,
+              message: "You have already registered for this event.",
+            });
+          }
+
+          // ================= Seat Check =================
+
+          const totalRegistration =
+            await registrationsCollection.countDocuments({
+              eventId: id,
+            });
+
+          if (totalRegistration >= event.attendeeLimit) {
+            return res.status(400).json({
+              success: false,
+              message: "No seats available.",
+            });
+          }
+
+          // ================= Registration =================
+
+          const registration = {
+            eventId: id,
+
+            eventTitle: event.title,
+            eventCategory: event.category,
+            eventImage: event.image,
+
+            eventDate: event.eventDate,
+            startTime: event.startTime,
+            endTime: event.endTime,
+
+            location: event.location,
+
+            organizerName: event.organizerName,
+            organizerEmail: event.organizerEmail,
+
+            attendeeName,
+            attendeeEmail: req.user?.email,
+
+            phone,
+            address: address || "",
+
+            paymentStatus: event.isPaid ? "pending" : "free",
+
+            ticketPrice: event.ticketPrice,
+
+            joinedAt: new Date(),
+          };
+
+          const result = await registrationsCollection.insertOne(registration);
+
+          // ================= Remaining Seats =================
+
+          const remainingSeats = event.attendeeLimit - (totalRegistration + 1);
+
+          res.status(201).json({
+            success: true,
+            message: event.isPaid
+              ? "Registration successful. Please complete payment."
+              : "Registration successful.",
+
+            insertedId: result.insertedId,
+
+            isPaid: event.isPaid,
+
+            remainingSeats,
+          });
+        } catch (error) {
+          console.error("Registration Error:", error);
+
+          res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+          });
+        }
+      },
+    );
 
     app.post(
       "/api/events",
@@ -93,6 +240,9 @@ async function run() {
             endTime,
             attendeeLimit,
             image,
+
+            isPaid,
+            ticketPrice,
           } = req.body;
 
           // Validation
@@ -125,8 +275,10 @@ async function run() {
             eventDate,
             startTime,
             endTime,
-            attendeeLimit: Number(attendeeLimit) || 0,
+            attendeeLimit,
             image,
+            isPaid,
+            ticketPrice,
 
             organizerName: req.user.name,
             organizerEmail: req.user.email,
@@ -170,7 +322,7 @@ async function run() {
         try {
           const events = await eventsCollection
             .find({
-              organizerEmail: req.user.email,
+              organizerEmail: req.user?.email,
             })
             .sort({ createdAt: -1 })
             .toArray();
@@ -234,7 +386,7 @@ async function run() {
       verifyToken,
       async (req: AuthRequest, res: Response) => {
         try {
-          const { id } = req.params;
+          const { id } = req.params as { id: string };
 
           if (!ObjectId.isValid(id)) {
             return res.status(400).json({
@@ -255,7 +407,7 @@ async function run() {
           }
 
           // Only organizer can update
-          if (existingEvent.organizerEmail !== req.user.email) {
+          if (existingEvent.organizerEmail !== req.user?.email) {
             return res.status(403).json({
               success: false,
               message: "You are not authorized to update this event.",
@@ -306,12 +458,99 @@ async function run() {
         }
       },
     );
+
+    // app.patch(
+    //   "/api/events/:id/join",
+    //   verifyToken,
+    //   async (req: AuthRequest, res: Response) => {
+    //     try {
+    //       const { id } = req.params as { id: string };
+
+    //       if (!ObjectId.isValid(id)) {
+    //         return res.status(400).json({
+    //           success: false,
+    //           message: "Invalid Event ID",
+    //         });
+    //       }
+
+    //       const event = await eventsCollection.findOne({
+    //         _id: new ObjectId(id),
+    //       });
+
+    //       if (!event) {
+    //         return res.status(404).json({
+    //           success: false,
+    //           message: "Event not found.",
+    //         });
+    //       }
+
+    //       // Organizer can't join own event
+    //       if (event.organizerEmail === req.user?.email) {
+    //         return res.status(400).json({
+    //           success: false,
+    //           message: "You cannot join your own event.",
+    //         });
+    //       }
+
+    //       // Duplicate join prevention
+    //       const alreadyJoined = event.joinedUsers?.find(
+    //         (user: { email: string }) => user.email === req.user?.email,
+    //       );
+
+    //       if (alreadyJoined) {
+    //         return res.status(400).json({
+    //           success: false,
+    //           message: "You have already joined this event.",
+    //         });
+    //       }
+
+    //       // Attendee limit
+    //       const joinedCount = event.joinedUsers?.length || 0;
+
+    //       if (joinedCount >= event.attendeeLimit) {
+    //         return res.status(400).json({
+    //           success: false,
+    //           message: "Attendee limit reached.",
+    //         });
+    //       }
+
+    //       const result = await eventsCollection.updateOne(
+    //         {
+    //           _id: new ObjectId(id),
+    //         },
+    //         {
+    //           $push: {
+    //             joinedUsers: {
+    //               name: req.user?.name,
+    //               email: req.user?.email,
+    //               joinedAt: new Date(),
+    //             },
+    //           },
+    //         },
+    //       );
+
+    //       res.status(200).json({
+    //         success: true,
+    //         message: "Successfully joined event.",
+    //         result,
+    //       });
+    //     } catch (error) {
+    //       console.error("Join Event Error:", error);
+
+    //       res.status(500).json({
+    //         success: false,
+    //         message: "Internal Server Error",
+    //       });
+    //     }
+    //   },
+    // );
+
     app.delete(
       "/api/events/:id",
       verifyToken,
       async (req: AuthRequest, res: Response) => {
         try {
-          const { id } = req.params;
+          const { id } = req.params as { id: string };
 
           if (!ObjectId.isValid(id)) {
             return res.status(400).json({
@@ -332,7 +571,7 @@ async function run() {
           }
 
           // Only organizer can delete
-          if (existingEvent.organizerEmail !== req.user.email) {
+          if (existingEvent.organizerEmail !== req.user?.email) {
             return res.status(403).json({
               success: false,
               message: "You are not authorized to delete this event.",
