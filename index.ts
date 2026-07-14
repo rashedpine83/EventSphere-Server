@@ -819,6 +819,31 @@ async function run() {
       }
     });
 
+    app.get("/api/users/:email", async (req: Request, res: Response) => {
+      try {
+        const { email } = req.params;
+
+        const user = await usersCollection.findOne({ email });
+
+        if (!user) {
+          return res.status(404).json({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.status(200).json({
+          success: true,
+          user,
+        });
+      } catch (error) {
+        res.status(500).json({
+          success: false,
+          message: "Internal Server Error",
+        });
+      }
+    });
+
     app.get("/api/users", async (req: Request, res: Response) => {
       const users = await usersCollection.find().toArray();
       res.send(users);
