@@ -4,8 +4,11 @@ import dotenv from "dotenv";
 import { MongoClient, ServerApiVersion, ObjectId } from "mongodb";
 import { createRemoteJWKSet, jwtVerify } from "jose-cjs";
 import { Request, Response, NextFunction } from "express";
+import Stripe from "stripe";
 dotenv.config();
 const port = process.env.PORT || 8000;
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 const app = express();
 app.use(cors());
@@ -79,6 +82,154 @@ async function run() {
     const registrationsCollection = database.collection("registrations");
     const usersCollection = database.collection("user");
 
+    app.post(
+      "/api/payment/create-checkout-session",
+      verifyToken,
+      async (req: AuthRequest, res: Response) => {
+        try {
+          const { registrationId } = req.body;
+
+          if (!ObjectId.isValid(registrationId)) {
+            return res.status(400).json({
+              success: false,
+              message: "Invalid Registration ID",
+            });
+          }
+
+          const registration = await registrationsCollection.findOne({
+            _id: new ObjectId(registrationId),
+          });
+
+          if (!registration) {
+            return res.status(404).json({
+              success: false,
+              message: "Registration not found.",
+            });
+          }
+
+          if (registration.attendeeEmail !== req.user?.email) {
+            return res.status(403).json({
+              success: false,
+              message: "Unauthorized.",
+            });
+          }
+
+          if (registration.paymentStatus === "paid") {
+            return res.status(400).json({
+              success: false,
+              message: "Already paid.",
+            });
+          }
+
+          const session = await stripe.checkout.sessions.create({
+            mode: "payment",
+
+            payment_method_types: ["card"],
+
+            customer_email: registration.attendeeEmail,
+
+            line_items: [
+              {
+                quantity: 1,
+
+                price_data: {
+                  currency: "usd",
+
+                  unit_amount: registration.ticketPrice * 100,
+
+                  product_data: {
+                    name: registration.eventTitle,
+                    description: registration.eventCategory,
+                  },
+                },
+              },
+            ],
+
+            metadata: {
+              registrationId: registration._id.toString(),
+            },
+
+            success_url: `${process.env.CLIENT_URL}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+
+            cancel_url: `${process.env.CLIENT_URL}/payment/cancel`,
+          });
+
+          res.status(200).json({
+            success: true,
+            checkoutUrl: session.url,
+            message: "Checkout session created successfully.",
+          });
+        } catch (error) {
+          console.error(error);
+
+          res.status(500).json({
+            success: false,
+            message: "Stripe session creation failed.",
+          });
+        }
+      },
+    );
+
+    app.get("/api/payment/success", async (req: Request, res: Response) => {
+      try {
+        const sessionId = req.query.session_id as string;
+
+        if (!sessionId) {
+          return res.status(400).json({
+            success: false,
+            message: "Session ID is required.",
+          });
+        }
+
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+        if (session.payment_status !== "paid") {
+          return res.status(400).json({
+            success: false,
+            message: "Payment not completed.",
+          });
+        }
+
+        const registrationId = session.metadata?.registrationId;
+
+        if (!registrationId) {
+          return res.status(400).json({
+            success: false,
+            message: "Registration ID not found.",
+          });
+        }
+
+        await registrationsCollection.updateOne(
+          {
+            _id: new ObjectId(registrationId),
+          },
+          {
+            $set: {
+              paymentStatus: "paid",
+              transactionId: session.payment_intent?.toString(),
+              paidAt: new Date(),
+            },
+          },
+        );
+
+        const registration = await registrationsCollection.findOne({
+          _id: new ObjectId(registrationId),
+        });
+
+        res.status(200).json({
+          success: true,
+          registrationId,
+          ticketId: registration?._id,
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+          success: false,
+          message: "Payment verification failed.",
+        });
+      }
+    });
     app.post(
       "/api/events/:id/register",
       verifyToken,
@@ -225,6 +376,42 @@ async function run() {
       },
     );
 
+    app.get("/api/registrations/:id", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params as { id: string };
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid Registration ID",
+          });
+        }
+
+        const registration = await registrationsCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!registration) {
+          return res.status(404).json({
+            success: false,
+            message: "Ticket not found.",
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          ticket: registration,
+        });
+      } catch (error) {
+        console.error(error);
+
+        return res.status(500).json({
+          success: false,
+          message: "Internal Server Error",
+        });
+      }
+    });
+
     app.post(
       "/api/events",
       verifyToken,
@@ -304,15 +491,49 @@ async function run() {
       },
     );
 
+    // app.get("/api/events", async (req: Request, res: Response) => {
+    //   const events = await eventsCollection
+    //     .find()
+    //     .sort({ createdAt: -1 })
+    //     .toArray();
+    //   res.status(200).json({
+    //     success: true,
+    //     events,
+    //   });
+    // });
+
     app.get("/api/events", async (req: Request, res: Response) => {
-      const events = await eventsCollection
-        .find()
-        .sort({ createdAt: -1 })
-        .toArray();
-      res.status(200).json({
-        success: true,
-        events,
-      });
+      try {
+        const page = Number(req.query.page) || 1;
+        const limit = Number(req.query.limit) || 12;
+
+        const skip = (page - 1) * limit;
+
+        const events = await eventsCollection
+          .find()
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        const totalCount = await eventsCollection.countDocuments();
+        const totalPages = Math.ceil(totalCount / limit);
+
+        res.status(200).json({
+          success: true,
+          events,
+          page,
+          totalPages,
+          totalCount,
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch events.",
+        });
+      }
     });
 
     app.get(
@@ -344,9 +565,10 @@ async function run() {
 
     app.get(
       "/api/events/:id",
-      async (req: Request<{ id: string }>, res: Response) => {
+      // Optional middleware
+      async (req: AuthRequest, res: Response) => {
         try {
-          const { id } = req.params;
+          const { id } = req.params as { id: string };
 
           if (!ObjectId.isValid(id)) {
             return res.status(400).json({
@@ -362,13 +584,43 @@ async function run() {
           if (!event) {
             return res.status(404).json({
               success: false,
-              message: "Event not found",
+              message: "Event not found.",
             });
+          }
+
+          // Total Registered Users
+          const registeredCount = await registrationsCollection.countDocuments({
+            eventId: id,
+          });
+
+          // Remaining Seats
+          const remainingSeats = Math.max(
+            0,
+            event.attendeeLimit - registeredCount,
+          );
+
+          // Current User Already Registered?
+          let alreadyRegistered = false;
+
+          if (req.user?.email) {
+            alreadyRegistered = !!(await registrationsCollection.findOne({
+              eventId: id,
+              attendeeEmail: req.user.email,
+            }));
           }
 
           res.status(200).json({
             success: true,
-            event,
+
+            event: {
+              ...event,
+
+              registeredCount,
+
+              remainingSeats,
+
+              alreadyRegistered,
+            },
           });
         } catch (error) {
           console.error(error);
@@ -459,92 +711,6 @@ async function run() {
       },
     );
 
-    // app.patch(
-    //   "/api/events/:id/join",
-    //   verifyToken,
-    //   async (req: AuthRequest, res: Response) => {
-    //     try {
-    //       const { id } = req.params as { id: string };
-
-    //       if (!ObjectId.isValid(id)) {
-    //         return res.status(400).json({
-    //           success: false,
-    //           message: "Invalid Event ID",
-    //         });
-    //       }
-
-    //       const event = await eventsCollection.findOne({
-    //         _id: new ObjectId(id),
-    //       });
-
-    //       if (!event) {
-    //         return res.status(404).json({
-    //           success: false,
-    //           message: "Event not found.",
-    //         });
-    //       }
-
-    //       // Organizer can't join own event
-    //       if (event.organizerEmail === req.user?.email) {
-    //         return res.status(400).json({
-    //           success: false,
-    //           message: "You cannot join your own event.",
-    //         });
-    //       }
-
-    //       // Duplicate join prevention
-    //       const alreadyJoined = event.joinedUsers?.find(
-    //         (user: { email: string }) => user.email === req.user?.email,
-    //       );
-
-    //       if (alreadyJoined) {
-    //         return res.status(400).json({
-    //           success: false,
-    //           message: "You have already joined this event.",
-    //         });
-    //       }
-
-    //       // Attendee limit
-    //       const joinedCount = event.joinedUsers?.length || 0;
-
-    //       if (joinedCount >= event.attendeeLimit) {
-    //         return res.status(400).json({
-    //           success: false,
-    //           message: "Attendee limit reached.",
-    //         });
-    //       }
-
-    //       const result = await eventsCollection.updateOne(
-    //         {
-    //           _id: new ObjectId(id),
-    //         },
-    //         {
-    //           $push: {
-    //             joinedUsers: {
-    //               name: req.user?.name,
-    //               email: req.user?.email,
-    //               joinedAt: new Date(),
-    //             },
-    //           },
-    //         },
-    //       );
-
-    //       res.status(200).json({
-    //         success: true,
-    //         message: "Successfully joined event.",
-    //         result,
-    //       });
-    //     } catch (error) {
-    //       console.error("Join Event Error:", error);
-
-    //       res.status(500).json({
-    //         success: false,
-    //         message: "Internal Server Error",
-    //       });
-    //     }
-    //   },
-    // );
-
     app.delete(
       "/api/events/:id",
       verifyToken,
@@ -599,9 +765,58 @@ async function run() {
     );
 
     app.post("/api/users", async (req: Request, res: Response) => {
-      const user = req.body;
-      const result = await usersCollection.insertOne(user);
-      res.send(result);
+      try {
+        const { name, email, image, role } = req.body;
+
+        if (!name || !email) {
+          return res.status(400).json({
+            success: false,
+            message: "Name and email are required.",
+          });
+        }
+
+        const user = {
+          name,
+          email,
+          image: image || "",
+          role: role || "attendee",
+          createdAt: new Date(),
+        };
+
+        const result = await usersCollection.updateOne(
+          { email },
+          {
+            $set: {
+              name: user.name,
+              image: user.image,
+              role: user.role,
+            },
+            $setOnInsert: {
+              email: user.email,
+              createdAt: user.createdAt,
+            },
+          },
+          {
+            upsert: true,
+          },
+        );
+
+        res.status(200).json({
+          success: true,
+          message: "User saved successfully.",
+          acknowledged: result.acknowledged,
+          upsertedId: result.upsertedId ?? null,
+          matchedCount: result.matchedCount,
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("USER CREATE ERROR:", error);
+
+        res.status(500).json({
+          success: false,
+          message: "Internal Server Error.",
+        });
+      }
     });
 
     app.get("/api/users", async (req: Request, res: Response) => {

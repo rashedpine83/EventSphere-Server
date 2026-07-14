@@ -13,11 +13,14 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@stripe/stripe-js": "^9.9.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "jose-cjs": "^6.2.3",
-    "mongodb": "^7.5.0"
+    "mongodb": "^7.5.0",
+    "next": "^16.2.10",
+    "stripe": "^22.3.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
