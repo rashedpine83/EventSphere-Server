@@ -517,17 +517,6 @@ async function run() {
       },
     );
 
-    // app.get("/api/events", async (req: Request, res: Response) => {
-    //   const events = await eventsCollection
-    //     .find()
-    //     .sort({ createdAt: -1 })
-    //     .toArray();
-    //   res.status(200).json({
-    //     success: true,
-    //     events,
-    //   });
-    // });
-
     app.get("/api/events", async (req: Request, res: Response) => {
       try {
         const page = Number(req.query.page) || 1;
@@ -654,6 +643,124 @@ async function run() {
           res.status(500).json({
             success: false,
             message: "Internal Server Error",
+          });
+        }
+      },
+    );
+
+    app.get("/api/admin/events", async (req: Request, res: Response) => {
+      try {
+        const {
+          page = "1",
+          limit = "10",
+          search = "",
+          category = "",
+        } = req.query;
+
+        const pageNum = Number(page);
+        const limitNum = Number(limit);
+        const skip = (pageNum - 1) * limitNum;
+
+        const query: any = {};
+
+        if (search) {
+          query.title = {
+            $regex: search,
+            $options: "i",
+          };
+        }
+
+        if (category && category !== "All") {
+          query.category = category;
+        }
+
+        const events = await eventsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .toArray();
+
+        const totalEvents = await eventsCollection.countDocuments(query);
+
+        const totalPages = Math.ceil(totalEvents / limitNum);
+
+        res.send({
+          success: true,
+          events,
+          totalEvents,
+          totalPages,
+          page: pageNum,
+        });
+      } catch (error: any) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    app.delete("/api/admin/events/:id", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid Event ID",
+          });
+        }
+
+        const result = await eventsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.send({
+          success: true,
+          result,
+        });
+      } catch (error: any) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    app.patch(
+      "/api/admin/events/:id/status",
+      async (req: Request, res: Response) => {
+        try {
+          const { id } = req.params;
+
+          const { status } = req.body;
+
+          if (!ObjectId.isValid(id)) {
+            return res.status(400).send({
+              success: false,
+              message: "Invalid Event ID",
+            });
+          }
+
+          const result = await eventsCollection.updateOne(
+            {
+              _id: new ObjectId(id),
+            },
+            {
+              $set: {
+                status,
+              },
+            },
+          );
+
+          res.send({
+            success: true,
+            result,
+          });
+        } catch (error: any) {
+          res.status(500).send({
+            success: false,
+            message: error.message,
           });
         }
       },
@@ -871,9 +978,165 @@ async function run() {
     });
 
     app.get("/api/users", async (req: Request, res: Response) => {
-      const users = await usersCollection.find().toArray();
-      res.send(users);
+      try {
+        const { page = "1", limit = "10", search = "", role = "" } = req.query;
+
+        const pageNum = Number(page);
+        const limitNum = Number(limit);
+        const skip = (pageNum - 1) * limitNum;
+
+        const query: any = {};
+
+        if (search) {
+          query.$or = [
+            {
+              name: {
+                $regex: search,
+                $options: "i",
+              },
+            },
+            {
+              email: {
+                $regex: search,
+                $options: "i",
+              },
+            },
+          ];
+        }
+
+        if (role && role !== "All") {
+          query.role = role;
+        }
+
+        const users = await usersCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .toArray();
+
+        const totalUsers = await usersCollection.countDocuments(query);
+
+        const totalPages = Math.ceil(totalUsers / limitNum);
+
+        res.send({
+          success: true,
+          users,
+          totalUsers,
+          totalPages,
+          page: pageNum,
+        });
+      } catch (error: any) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
     });
+
+    app.patch("/api/users/:id/role", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+
+        const { role } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid User ID",
+          });
+        }
+
+        const result = await usersCollection.updateOne(
+          {
+            _id: new ObjectId(id),
+          },
+          {
+            $set: {
+              role,
+            },
+          },
+        );
+
+        res.send({
+          success: true,
+          result,
+        });
+      } catch (error: any) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    app.patch("/api/users/:id/status", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+
+        const { status } = req.body;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid User ID",
+          });
+        }
+
+        const result = await usersCollection.updateOne(
+          {
+            _id: new ObjectId(id),
+          },
+          {
+            $set: {
+              status,
+            },
+          },
+        );
+
+        res.send({
+          success: true,
+          result,
+        });
+      } catch (error: any) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    app.delete("/api/users/:id", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid User ID",
+          });
+        }
+
+        const result = await usersCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.send({
+          success: true,
+          result,
+        });
+      } catch (error: any) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    // app.get("/api/users", async (req: Request, res: Response) => {
+    //   const users = await usersCollection.find().toArray();
+    //   res.send(users);
+    // });
 
     app.get("/api/wishlist/:email", async (req: Request, res: Response) => {
       try {
