@@ -76,7 +76,7 @@ const verifyToken = async (
 
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     const database = client.db("EventSphere");
     const eventsCollection = database.collection("events");
     const registrationsCollection = database.collection("registrations");
@@ -702,7 +702,7 @@ async function run() {
 
     app.delete("/api/admin/events/:id", async (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const { id } = req.params as { id: string };
 
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({
@@ -731,7 +731,7 @@ async function run() {
       "/api/admin/events/:id/status",
       async (req: Request, res: Response) => {
         try {
-          const { id } = req.params;
+          const { id } = req.params as { id: string };
 
           const { status } = req.body;
 
@@ -1036,7 +1036,7 @@ async function run() {
 
     app.patch("/api/users/:id/role", async (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const { id } = req.params as { id: string };
 
         const { role } = req.body;
 
@@ -1072,7 +1072,7 @@ async function run() {
 
     app.patch("/api/users/:id/status", async (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const { id } = req.params as { id: string };
 
         const { status } = req.body;
 
@@ -1108,7 +1108,7 @@ async function run() {
 
     app.delete("/api/users/:id", async (req: Request, res: Response) => {
       try {
-        const { id } = req.params;
+        const { id } = req.params as { id: string };
 
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({
@@ -1133,7 +1133,7 @@ async function run() {
       }
     });
 
-    // app.get("/api/users", async (req: Request, res: Response) => {
+    // app.get("/api/all-users", async (req: Request, res: Response) => {
     //   const users = await usersCollection.find().toArray();
     //   res.send(users);
     // });
@@ -1284,7 +1284,7 @@ async function run() {
           ])
           .toArray();
 
-        const revenue = revenueResult.length > 0 ? revenueResult[0].total : 0;
+        const revenue = revenueResult[0]?.total ?? 0;
 
         const categoryData = await eventsCollection
           .aggregate([
