@@ -81,6 +81,7 @@ async function run() {
     const eventsCollection = database.collection("events");
     const registrationsCollection = database.collection("registrations");
     const usersCollection = database.collection("user");
+    const wishsCollection = database.collection("wishs");
 
     app.post(
       "/api/payment/create-checkout-session",
@@ -406,6 +407,31 @@ async function run() {
         console.error(error);
 
         return res.status(500).json({
+          success: false,
+          message: "Internal Server Error",
+        });
+      }
+    });
+
+    app.get("/api/my-bookings/:email", async (req: Request, res: Response) => {
+      try {
+        const { email } = req.params;
+
+        const bookings = await registrationsCollection
+          .find({
+            attendeeEmail: email,
+          })
+          .sort({ joinedAt: -1 })
+          .toArray();
+
+        res.status(200).json({
+          success: true,
+          bookings,
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
           success: false,
           message: "Internal Server Error",
         });
@@ -847,6 +873,116 @@ async function run() {
     app.get("/api/users", async (req: Request, res: Response) => {
       const users = await usersCollection.find().toArray();
       res.send(users);
+    });
+
+    app.get("/api/wishlist/:email", async (req: Request, res: Response) => {
+      try {
+        const { email } = req.params;
+
+        const wishlists = await wishsCollection
+          .find({
+            userEmail: email,
+          })
+          .sort({ addedAt: -1 })
+          .toArray();
+
+        res.status(200).json({
+          success: true,
+          wishlists,
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+          success: false,
+          message: "Internal Server Error.",
+        });
+      }
+    });
+
+    app.post("/api/wishlist", async (req: Request, res: Response) => {
+      try {
+        const wishlist = req.body;
+
+        if (!wishlist.eventId || !wishlist.userEmail) {
+          return res.status(400).json({
+            success: false,
+            message: "Event ID and User Email are required.",
+          });
+        }
+
+        const existing = await wishsCollection.findOne({
+          eventId: wishlist.eventId,
+          userEmail: wishlist.userEmail,
+        });
+
+        if (existing) {
+          return res.status(200).json({
+            success: true,
+            message: "Already added to wishlist.",
+          });
+        }
+
+        const newWishlist = {
+          eventId: wishlist.eventId,
+          eventTitle: wishlist.eventTitle,
+          eventCategory: wishlist.eventCategory,
+          eventImage: wishlist.eventImage,
+          eventDate: wishlist.eventDate,
+          location: wishlist.location,
+          isPaid: wishlist.isPaid,
+          ticketPrice: wishlist.ticketPrice,
+          organizerName: wishlist.organizerName,
+          organizerEmail: wishlist.organizerEmail,
+          userEmail: wishlist.userEmail,
+          addedAt: new Date(),
+        };
+
+        const result = await wishsCollection.insertOne(newWishlist);
+
+        res.status(201).json({
+          success: true,
+          insertedId: result.insertedId,
+          message: "Added to wishlist successfully.",
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+          success: false,
+          message: "Internal Server Error.",
+        });
+      }
+    });
+
+    app.delete("/api/wishlist/:id", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params as { id: string };
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid Wishlist ID.",
+          });
+        }
+
+        const result = await wishsCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        res.status(200).json({
+          success: true,
+          deletedCount: result.deletedCount,
+          message: "Removed from wishlist.",
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+          success: false,
+          message: "Internal Server Error.",
+        });
+      }
     });
 
     await client.db("admin").command({ ping: 1 });
