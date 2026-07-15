@@ -985,6 +985,107 @@ async function run() {
       }
     });
 
+    app.get("/api/admin/dashboard", async (req: Request, res: Response) => {
+      try {
+        const totalUsers = await usersCollection.countDocuments();
+
+        const totalEvents = await eventsCollection.countDocuments();
+
+        const totalBookings = await registrationsCollection.countDocuments();
+
+        const totalWishlist = await wishsCollection.countDocuments();
+
+        const totalOrganizers = await usersCollection.countDocuments({
+          role: "organizer",
+        });
+
+        const totalAttendees = await usersCollection.countDocuments({
+          role: "attendee",
+        });
+
+        const revenueResult = await registrationsCollection
+          .aggregate([
+            {
+              $match: {
+                paymentStatus: "paid",
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                total: {
+                  $sum: "$ticketPrice",
+                },
+              },
+            },
+          ])
+          .toArray();
+
+        const revenue = revenueResult.length > 0 ? revenueResult[0].total : 0;
+
+        const categoryData = await eventsCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$category",
+                count: {
+                  $sum: 1,
+                },
+              },
+            },
+            {
+              $sort: {
+                count: -1,
+              },
+            },
+          ])
+          .toArray();
+
+        const latestEvents = await eventsCollection
+          .find()
+          .sort({
+            createdAt: -1,
+          })
+          .limit(5)
+          .toArray();
+
+        const latestUsers = await usersCollection
+          .find()
+          .sort({
+            createdAt: -1,
+          })
+          .limit(5)
+          .toArray();
+
+        res.send({
+          success: true,
+
+          stats: {
+            totalUsers,
+            totalEvents,
+            totalBookings,
+            totalWishlist,
+            totalOrganizers,
+            totalAttendees,
+            revenue,
+          },
+
+          categoryData,
+
+          latestEvents,
+
+          latestUsers,
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).send({
+          success: false,
+          message: "Dashboard data load failed.",
+        });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
