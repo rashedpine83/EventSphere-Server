@@ -57,6 +57,9 @@ const verifyToken = async (
   const token = authHeader.split(" ")[1];
 
   try {
+    if (!token) {
+      throw new Error("Token not found");
+    }
     const { payload } = await jwtVerify(token, JWKS);
 
     req.user = {
@@ -376,6 +379,38 @@ async function run() {
         }
       },
     );
+
+    app.get("/api/categories", async (req: Request, res: Response) => {
+      try {
+        const categories = await eventsCollection
+          .aggregate([
+            {
+              $group: {
+                _id: "$category",
+                totalEvents: {
+                  $sum: 1,
+                },
+              },
+            },
+            {
+              $sort: {
+                totalEvents: -1,
+              },
+            },
+          ])
+          .toArray();
+
+        res.send({
+          success: true,
+          categories,
+        });
+      } catch (error: any) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
 
     app.get("/api/registrations/:id", async (req: Request, res: Response) => {
       try {
@@ -1284,7 +1319,7 @@ async function run() {
           ])
           .toArray();
 
-        const revenue = revenueResult[0]?.total ?? 0;
+        const totalRevenue = revenueResult[0]?.total ?? 0;
 
         const categoryData = await eventsCollection
           .aggregate([
@@ -1330,7 +1365,7 @@ async function run() {
             totalWishlist,
             totalOrganizers,
             totalAttendees,
-            revenue,
+            totalRevenue,
           },
 
           categoryData,
